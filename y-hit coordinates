@@ -49,7 +49,7 @@ def laser_hit_y_from_planar_fk(joint_angles_deg):
     # ---- YOUR REQUEST: abs(target_x) and abs(x_e) ----
     t = (abs(target_x) - abs(x_e)) / np.cos(theta)
 
-    y_hit = y_e + t * np.sin(theta)
+    y_hit = (abs(y_e)) + t * np.sin(theta)
     return y_hit
 
 
