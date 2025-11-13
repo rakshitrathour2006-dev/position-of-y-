@@ -1,8 +1,22 @@
 import numpy as np
+import time
+from esp_bridge import ESPActuatorController as ActuatorController
+from esp_bridge import OperatingMode
 
-# ------------------------------
-# Forward Kinematics (Planar XY)
-# ------------------------------
+# -------------------------
+#   STOP FLAG
+# -------------------------
+scanning_active = True
+
+def stop_code():
+    global scanning_active
+    scanning_active = False
+    print("STOP pressed → stopping scan...")
+
+
+# ============================================================
+#           PLANAR 3-LINK FORWARD KINEMATICS (XY)
+# ============================================================
 def forward_kinematics_xy(joint_angles_rad):
     L1 = 0.10  # meters
     L2 = 0.07
@@ -10,39 +24,134 @@ def forward_kinematics_xy(joint_angles_rad):
 
     q1, q2, q3 = joint_angles_rad
 
-    # Cumulative angles
     a1 = q1
     a2 = q1 + q2
     a3 = q1 + q2 + q3
 
-    # End-effector XY
-    x = L1*np.cos(a1) + L2*np.cos(a2) + L3*np.cos(a3)
-    y = L1*np.sin(a1) + L2*np.sin(a2) + L3*np.sin(a3)
+    x = L1 * np.cos(a1) + L2 * np.cos(a2) + L3 * np.cos(a3)
+    y = L1 * np.sin(a1) + L2 * np.sin(a2) + L3 * np.sin(a3)
 
-    return x, y, a3   # also return final angle for laser direction
+    return x, y, a3
 
 
-# ------------------------------
-# Laser hit solver
-# ------------------------------
-def laser_hit_y(joint_angles_deg):
-    # Convert to radians
+# ============================================================
+#         LASER INTERSECTION USING YOUR EXACT FORMULA
+# ============================================================
+def laser_hit_y_from_planar_fk(joint_angles_deg):
     joint_angles_rad = np.radians(joint_angles_deg)
+    x_e, y_e, theta = forward_kinematics_xy(joint_angles_rad)
 
-    # FK gives end-effector position + final angle
-    x_e, y_e, theta_laser = forward_kinematics_xy(joint_angles_rad)
+    target_x = -0.23  # fixed screen X
 
-    # Vertical screen location
-    target_x = -0.23   # meters
+    if abs(np.cos(theta)) < 1e-8:
+        return None
 
-    # Avoid division by zero if laser is vertical
-    if abs(np.cos(theta_laser)) < 1e-8:
-        return None  # No intersection (parallel)
+    # ---- YOUR REQUEST: abs(target_x) and abs(x_e) ----
+    t = (abs(target_x) - abs(x_e)) / np.cos(theta)
 
-    # Solve for intersection parameter t
-    t = (target_x - x_e) / np.cos(theta_laser)
-
-    # Compute Y hit
-    y_hit = y_e + t * np.sin(theta_laser)
-
+    y_hit = y_e + t * np.sin(theta)
     return y_hit
+
+
+# ============================================================
+#                   MAIN SCANNING FUNCTION
+# ============================================================
+def run_challenge(robot, actuator_controller):
+    global scanning_active
+    scanning_active = True
+
+    j1, j2, j3 = 1, 2, 3
+    J2_FIXED_DEG = 90.0
+
+    J1_STEP_DEG = 5
+    J3_SPEED_DEG = 1.0
+    LOOP_DT = 0.03
+
+    def get_J3_range(j1_deg):
+        if j1_deg < 30:
+            return (90.0, 50.0)
+        elif j1_deg < 45:
+            return (70.0, 20.0)
+        elif j1_deg < 60:
+            return (60.0, 30.0)
+        elif j1_deg < 75:
+            return (50.0, 10.0)
+        else:
+            return (45.0, 0.0)
+
+    final_angles_deg = [0.0, J2_FIXED_DEG, 90.0]
+
+    try:
+        for jid in [j1, j2, j3]:
+            actuator_controller.change_operating_mode(jid, OperatingMode.POSITION)
+            actuator_controller.enable_torque(jid)
+
+        actuator_controller.set_position(
+            j2, actuator_controller.relative_joint_angle_to_raw(j2, np.radians(J2_FIXED_DEG))
+        )
+        time.sleep(0.3)
+
+        print("Scanning started… Press STOP anytime.\n")
+
+        j1_deg = 0.0
+        while j1_deg <= 90.0:
+            if not scanning_active:
+                break
+
+            j3_start_deg, j3_end_deg = get_J3_range(j1_deg)
+
+            actuator_controller.set_position(
+                j1, actuator_controller.relative_joint_angle_to_raw(j1, np.radians(j1_deg))
+            )
+            time.sleep(0.25)
+
+            print(f"J1 = {j1_deg:.1f}°  →  J3 sweep {j3_start_deg:.1f}° → {j3_end_deg:.1f}°")
+
+            j3_deg = j3_start_deg
+            while j3_deg > j3_end_deg and scanning_active:
+                j3_deg -= J3_SPEED_DEG
+                if j3_deg < j3_end_deg:
+                    j3_deg = j3_end_deg
+
+                actuator_controller.set_position(
+                    j3, actuator_controller.relative_joint_angle_to_raw(j3, np.radians(j3_deg))
+                )
+                actuator_controller.set_position(
+                    j2, actuator_controller.relative_joint_angle_to_raw(j2, np.radians(J2_FIXED_DEG))
+                )
+
+                final_angles_deg = [j1_deg, J2_FIXED_DEG, j3_deg]
+
+                time.sleep(LOOP_DT)
+
+            if not scanning_active:
+                break
+
+            j1_deg += J1_STEP_DEG
+
+        print("\nSTOP detected → computing Y intersection using your planar FK...")
+
+        y_raw = laser_hit_y_from_planar_fk(final_angles_deg)
+        if y_raw is None:
+            print("Laser parallel to wall → no intersection; returning default.")
+            return np.array([-0.23, 0.0, 0.0])
+
+        scale_factor = 0.70 / 0.1738
+        y_corrected = y_raw * scale_factor
+
+        print("\n========== FINAL LASER HIT COORDINATES ==========")
+        print(f"X = -0.2300   (fixed)")
+        print(f"Raw Y = {y_raw:.6f}")
+        print(f"Y_corrected = {y_corrected:.6f}")
+        print("Z = 0.0000   (ignored)")
+        print("=================================================\n")
+
+        return np.array([-0.23, y_corrected, 0.0])
+
+    finally:
+        for jid in [j1, j2, j3]:
+            try:
+                actuator_controller.disable_torque(jid)
+            except:
+                pass
+        print("Torque disabled.")
