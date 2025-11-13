@@ -1,0 +1,26 @@
+import numpy as np
+
+def laser_hit_y(robot, joint_angles_deg):
+    # Convert to radians
+    joint_angles_rad = np.radians(joint_angles_deg)
+
+    # Forward kinematics gives end effector position
+    x_e, y_e, _ = robot.forwardKinematics(joint_angles_rad)
+
+    # Laser direction angle = sum of joint angles
+    theta_laser = sum(joint_angles_rad)
+
+    # Solve for t such that x(t) = -0.23
+    # x(t) = x_e + t*cos(theta)
+    target_x = -0.23
+
+    # avoid division by zero (laser is vertical)
+    if abs(np.cos(theta_laser)) < 1e-6:
+        return None  # laser parallel to x = -0.23
+
+    t = (target_x - x_e) / np.cos(theta_laser)
+
+    # compute y at this t
+    y_hit = y_e + t * np.sin(theta_laser)
+
+    return y_hit
