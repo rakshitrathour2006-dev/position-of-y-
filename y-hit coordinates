@@ -1,26 +1,48 @@
 import numpy as np
 
-def laser_hit_y(robot, joint_angles_deg):
+# ------------------------------
+# Forward Kinematics (Planar XY)
+# ------------------------------
+def forward_kinematics_xy(joint_angles_rad):
+    L1 = 0.10  # meters
+    L2 = 0.07
+    L3 = 0.05
+
+    q1, q2, q3 = joint_angles_rad
+
+    # Cumulative angles
+    a1 = q1
+    a2 = q1 + q2
+    a3 = q1 + q2 + q3
+
+    # End-effector XY
+    x = L1*np.cos(a1) + L2*np.cos(a2) + L3*np.cos(a3)
+    y = L1*np.sin(a1) + L2*np.sin(a2) + L3*np.sin(a3)
+
+    return x, y, a3   # also return final angle for laser direction
+
+
+# ------------------------------
+# Laser hit solver
+# ------------------------------
+def laser_hit_y(joint_angles_deg):
     # Convert to radians
     joint_angles_rad = np.radians(joint_angles_deg)
 
-    # Forward kinematics gives end effector position
-    x_e, y_e, _ = robot.forwardKinematics(joint_angles_rad)
+    # FK gives end-effector position + final angle
+    x_e, y_e, theta_laser = forward_kinematics_xy(joint_angles_rad)
 
-    # Laser direction angle = sum of joint angles
-    theta_laser = sum(joint_angles_rad)
+    # Vertical screen location
+    target_x = -0.23   # meters
 
-    # Solve for t such that x(t) = -0.23
-    # x(t) = x_e + t*cos(theta)
-    target_x = -0.23
+    # Avoid division by zero if laser is vertical
+    if abs(np.cos(theta_laser)) < 1e-8:
+        return None  # No intersection (parallel)
 
-    # avoid division by zero (laser is vertical)
-    if abs(np.cos(theta_laser)) < 1e-6:
-        return None  # laser parallel to x = -0.23
-
+    # Solve for intersection parameter t
     t = (target_x - x_e) / np.cos(theta_laser)
 
-    # compute y at this t
+    # Compute Y hit
     y_hit = y_e + t * np.sin(theta_laser)
 
     return y_hit
