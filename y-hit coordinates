@@ -14,43 +14,73 @@ def stop_code():
     print("STOP pressed → stopping scan...")
 
 
-# ============================================================
-#           PLANAR 3-LINK FORWARD KINEMATICS (XY)
-# ============================================================
-def forward_kinematics_xy(joint_angles_rad):
-    L1 = 0.10  # meters
-    L2 = 0.07
-    L3 = 0.05
+STATE = "search"
+traversal_count = 0
 
-    q1, q2, q3 = joint_angles_rad
+---------------------------------------
+STATE: search
+---------------------------------------
+• Base (J1) sweeps between 60° and 150°
+      - Every base_update_interval seconds, OR
+      - After J2 completes a sweep segment (secondary_scan_complete)
 
-    a1 = q1
-    a2 = q1 + q2
-    a3 = q1 + q2 + q3
+      If J1 hits 60° → direction = +1
+      If J1 hits 150° → direction = -1
 
-    x = L1 * np.cos(a1) + L2 * np.cos(a2) + L3 * np.cos(a3)
-    y = L1 * np.sin(a1) + L2 * np.sin(a2) + L3 * np.sin(a3)
+• J2 and J3 sweep inside their default secondary scan ranges
 
-    return x, y, a3
+• If a laser hit is detected:
+      → Lock base to 87°
+      → Reset traversal_count = 0
+      → Switch to STATE: "locked_87"
+      → Set J2 scan range = 30°..70°
+      → Start J2 sweep (mid_direction = +1)
 
+---------------------------------------
+STATE: locked_87   (Stage 1)
+---------------------------------------
+• Base is locked at 87°
 
-# ============================================================
-#         LASER INTERSECTION USING YOUR EXACT FORMULA
-# ============================================================
-def laser_hit_y_from_planar_fk(joint_angles_deg):
-    joint_angles_rad = np.radians(joint_angles_deg)
-    x_e, y_e, theta = forward_kinematics_xy(joint_angles_rad)
+• J2 sweeps between 30° and 70°
+      If J2 hits 70° → reverse direction (-1)
+      If J2 hits 30° → reverse direction (+1)
 
-    target_x = -0.23  # fixed screen X
+• A traversal is counted when:
+      mid_direction changes from +1 to -1
 
-    if abs(np.cos(theta)) < 1e-8:
-        return None
+• When traversal_count ≥ 1:
+      → Switch to STATE: "move_to_0"
 
-    # ---- YOUR REQUEST: abs(target_x) and abs(x_e) ----
-    t = (abs(target_x) - abs(x_e)) / np.cos(theta)
+---------------------------------------
+STATE: move_to_0
+---------------------------------------
+• Command base to 0°
+• Lock J2 at exactly 90°
+• Set J3 scan range = 60°..90°
+• Reset traversal_count = 0
+• Switch immediately to STATE: "locked_0"
 
-    y_hit = (abs(y_e)) + t * np.sin(theta)
-    return y_hit
+---------------------------------------
+STATE: locked_0   (Stage 2)
+---------------------------------------
+• Base locked at 0°
+• J2 locked at 90°
+
+• J3 sweeps between 60° and 90°
+      If J3 hits 90° → direction = -1
+      If J3 hits 60° → direction = +1
+
+• A traversal is counted when:
+      end_direction changes from +1 to -1
+
+• When traversal_count ≥ 1:
+      → Switch to STATE: "done"
+
+---------------------------------------
+STATE: done
+---------------------------------------
+• No more scanning motion
+• Wait until stop_event is set
 
 
 # ============================================================
